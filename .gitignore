@@ -1,0 +1,20 @@
+# Python Backend
+backend/venv/
+backend/__pycache__/
+backend/.pytest_cache/
+*.pyc
+
+# Node Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.env.local
+frontend/.env.*.local
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Project generated config
+.gemini/
