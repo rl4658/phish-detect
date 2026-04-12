@@ -45,6 +45,37 @@ export default function Home() {
     [analysis]
   );
 
+  const handleExportCSV = useCallback(() => {
+    if (!analysis.results || analysis.results.length === 0) return;
+
+    const keys = Object.keys(analysis.results[0]);
+    const csvContent = [
+      keys.join(","),
+      ...analysis.results.map((row) =>
+        keys
+          .map((k) => {
+            let val = (row as any)[k];
+            if (val === null || val === undefined) val = "";
+            val = String(val).replace(/"/g, '""');
+            return `"${val}"`;
+          })
+          .join(",")
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const filenameBase = analysis.fileName
+      ? analysis.fileName.split(".")[0]
+      : "phishdetect";
+    link.setAttribute("download", `${filenameBase}_results.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [analysis]);
+
   // Pick the first result or selected for detail view
   const detailResult =
     selectedResult || (analysis.results ? analysis.results[0] : null);
@@ -270,14 +301,28 @@ export default function Home() {
                   )}
                 </p>
               </div>
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={analysis.reset}
-                className="px-5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white/60 text-sm font-medium hover:bg-white/10 hover:text-white transition-all"
-              >
-                New Analysis
-              </motion.button>
+              <div className="flex flex-wrap items-center gap-3">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleExportCSV}
+                  className="px-5 py-2.5 rounded-xl border border-cyan-500/50 bg-cyan-500/10 text-cyan-300 text-sm font-medium hover:bg-cyan-500/20 transition-all flex items-center gap-2"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                  Export CSV
+                </motion.button>
+
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={analysis.reset}
+                  className="px-5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white/60 text-sm font-medium hover:bg-white/10 hover:text-white transition-all"
+                >
+                  New Analysis
+                </motion.button>
+              </div>
             </motion.div>
 
             {/* Bento Grid */}
