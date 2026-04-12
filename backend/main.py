@@ -49,18 +49,29 @@ app.add_middleware(
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 model = None
 scaler = None
-
+nlp_model = None
+tfidf = None
 
 def load_model():
-    global model, scaler
+    global model, scaler, nlp_model, tfidf
     model_path = os.path.join(MODELS_DIR, "phishing_model.pkl")
     scaler_path = os.path.join(MODELS_DIR, "preprocessor.pkl")
+    nlp_model_path = os.path.join(MODELS_DIR, "nlp_model.pkl")
+    tfidf_path = os.path.join(MODELS_DIR, "tfidf.pkl")
+    
     if os.path.exists(model_path) and os.path.exists(scaler_path):
         model = joblib.load(model_path)
         scaler = joblib.load(scaler_path)
         print(f"[OK] Model loaded from {model_path}")
     else:
         print(f"[!] Model files not found in {MODELS_DIR}. Run train.py first.")
+        
+    if os.path.exists(nlp_model_path) and os.path.exists(tfidf_path):
+        nlp_model = joblib.load(nlp_model_path)
+        tfidf = joblib.load(tfidf_path)
+        print(f"[OK] NLP Model loaded from {nlp_model_path}")
+    else:
+        print(f"[i] NLP Model files not found in {MODELS_DIR}. Standard inference only.")
 
 
 @app.on_event("startup")
@@ -174,43 +185,70 @@ def process_csv(task_id: str, content: bytes):
             tasks[task_id]["error"] = "CSV file is empty"
             return
 
-        # Check required columns
-        required = ["spf_result", "dkim_result", "dmarc_result", "num_urls", "from_domain"]
-        missing = [c for c in required if c not in df.columns]
-        if missing:
+        # Dynamically map text columns
+        body_cols = ["body", "body_plain", "text", "message", "content", "email_body"]
+        subject_cols = ["subject", "title", "header_subject"]
+        body_col = next((c for c in df.columns if str(c).lower() in body_cols), None)
+        subject_col = next((c for c in df.columns if str(c).lower() in subject_cols), None)
+
+        # Check if enough metadata columns exist
+        metadata_cols = ["spf_result", "dkim_result", "dmarc_result", "num_urls", "from_domain", "has_attachments"]
+        found_meta = [c for c in df.columns if c in metadata_cols]
+
+        # Route dynamically
+        use_nlp = False
+        if len(found_meta) >= 3:
+            pass  # Route 1: Tabular features
+        elif body_col or subject_col:
+            if nlp_model is None or tfidf is None:
+                tasks[task_id]["status"] = "error"
+                tasks[task_id]["error"] = "NLP Model is not loaded. Train the NLP model first."
+                return
+            use_nlp = True  # Route 2: NLP text
+        else:
+            # Route 3: Not an email dataset
             tasks[task_id]["status"] = "error"
-            tasks[task_id]["error"] = f"Missing columns: {', '.join(missing)}"
+            tasks[task_id]["error"] = "This is not related to an email dataset. Missing recognizable text or metadata columns."
             return
 
-        # Fill missing optional columns
-        optional_defaults = {
-            "has_attachments": False,
-            "contains_tracking_token": False,
-            "reply_to": "",
-            "num_received_headers": 0,
-            "x_spam_score": 0.0,
-            "has_html": False,
-        }
-        for col, default in optional_defaults.items():
-            if col not in df.columns:
-                df[col] = default
+        if use_nlp:
+            df["_temp_sub"] = df[subject_col].fillna("") if subject_col else ""
+            df["_temp_bod"] = df[body_col].fillna("") if body_col else ""
+            combined_texts = df["_temp_sub"].astype(str) + " " + df["_temp_bod"].astype(str)
 
-        # Batch feature extraction
-        features_df = extract_features_dataframe(df)
-        scaled_features = scaler.transform(features_df)
+            X_text = tfidf.transform(combined_texts)
+            predictions = nlp_model.predict(X_text)
+            probabilities = nlp_model.predict_proba(X_text)
+        else:
+            # Fill missing attributes with defaults for tabular route
+            required_defaults = {
+                "spf_result": "none", "dkim_result": "none", "dmarc_result": "none",
+                "num_urls": 0, "from_domain": "unknown", "has_attachments": False,
+                "contains_tracking_token": False, "reply_to": "", "num_received_headers": 0,
+                "x_spam_score": 0.0, "has_html": False
+            }
+            for col, default in required_defaults.items():
+                if col not in df.columns:
+                    df[col] = default
 
-        # Batch prediction
-        predictions = model.predict(scaled_features)
-        probabilities = model.predict_proba(scaled_features)
+            # Batch feature extraction
+            features_df = extract_features_dataframe(df)
+            scaled_features = scaler.transform(features_df)
+
+            # Batch prediction
+            predictions = model.predict(scaled_features)
+            probabilities = model.predict_proba(scaled_features)
 
         # Build results
         results = []
+        df_records = df.to_dict('records')
         for i in range(total):
-            row = df.iloc[i]
+            row = df_records[i]
+            subj_val = str(row.get(subject_col, "N/A")) if subject_col else str(row.get("subject", "N/A"))
             result = {
                 "index": i,
-                "subject": str(row.get("subject", "N/A")) if "subject" in df.columns else "N/A",
-                "from_address": str(row.get("from_address", "N/A")) if "from_address" in df.columns else "N/A",
+                "subject": subj_val,
+                "from_address": str(row.get("from_address", "N/A")),
                 "from_domain": str(row.get("from_domain", "")),
                 "reply_to": str(row.get("reply_to", "")),
                 "prediction": "Phishing" if predictions[i] == 1 else "Legit",
@@ -223,7 +261,7 @@ def process_csv(task_id: str, content: bytes):
                 "num_urls": int(row.get("num_urls", 0)) if not pd.isna(row.get("num_urls", 0)) else 0,
                 "has_attachments": bool(str(row.get("has_attachments", False)).strip().lower() in ("true", "1", "yes")),
                 "contains_tracking_token": bool(str(row.get("contains_tracking_token", False)).strip().lower() in ("true", "1", "yes")),
-                "received_origin_ip": str(row.get("received_origin_ip", "N/A")) if "received_origin_ip" in df.columns else "N/A",
+                "received_origin_ip": str(row.get("received_origin_ip", "N/A")),
                 "num_received_headers": int(row.get("num_received_headers", 0)) if not pd.isna(row.get("num_received_headers", 0)) else 0,
                 "x_spam_score": float(row.get("x_spam_score", 0.0)) if not pd.isna(row.get("x_spam_score", 0.0)) else 0.0,
             }

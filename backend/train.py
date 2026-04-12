@@ -25,6 +25,7 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
 )
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Allow imports when run directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,7 +52,7 @@ def main():
         "num_urls", "has_attachments", "contains_tracking_token",
         "from_domain", "reply_to",
         "num_received_headers", "x_spam_score", "has_html",
-        "label",
+        "label", "subject", "body_plain"
     ]
     df = pd.read_csv(data_path, usecols=needed_cols, low_memory=False)
     print(f"       Loaded {len(df):,} rows in {time.time() - t0:.1f}s")
@@ -121,19 +122,54 @@ def main():
         bar = "#" * int(imp * 50)
         print(f"  {name:.<25s} {imp:.4f}  {bar}")
 
+    # ── 6. NLP Fallback Model Training ────────────────────────
+    print("\n[6/6] Training Fallback NLP Model (TF-IDF) on subject and body...")
+    t0_nlp = time.time()
+    
+    # Fill NA and combine subject + body
+    df["subject"] = df["subject"].fillna("")
+    df["body_plain"] = df["body_plain"].fillna("")
+    df["combined_text"] = df["subject"] + " " + df["body_plain"]
+    
+    tfidf = TfidfVectorizer(max_features=3000, stop_words="english", ngram_range=(1, 2))
+    X_nlp = tfidf.fit_transform(df["combined_text"])
+    X_train_nlp, X_test_nlp, y_train_nlp, y_test_nlp = train_test_split(
+        X_nlp, y, test_size=0.2, random_state=42, stratify=y
+    )
+    
+    nlp_model = RandomForestClassifier(
+        n_estimators=100,  # Lower estimators for memory efficiency
+        max_depth=25,
+        min_samples_split=5,
+        random_state=42,
+        n_jobs=-1,
+        class_weight="balanced"
+    )
+    nlp_model.fit(X_train_nlp, y_train_nlp)
+    
+    nlp_pred = nlp_model.predict(X_test_nlp)
+    nlp_acc = accuracy_score(y_test_nlp, nlp_pred)
+    print(f"       NLP Model Training completed in {time.time() - t0_nlp:.1f}s")
+    print(f"       NLP Model Accuracy: {nlp_acc:.4f}  ({nlp_acc * 100:.2f}%)")
+
     # ── Export ────────────────────────────────────────────────
     models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
     os.makedirs(models_dir, exist_ok=True)
 
     model_path = os.path.join(models_dir, "phishing_model.pkl")
     scaler_path = os.path.join(models_dir, "preprocessor.pkl")
+    nlp_model_path = os.path.join(models_dir, "nlp_model.pkl")
+    tfidf_path = os.path.join(models_dir, "tfidf.pkl")
 
     joblib.dump(model, model_path)
     joblib.dump(scaler, scaler_path)
+    joblib.dump(nlp_model, nlp_model_path)
+    joblib.dump(tfidf, tfidf_path)
 
-
-    print(f"\n[OK] Model saved to {model_path}")
+    print(f"\n[OK] Tabular Model saved to {model_path}")
     print(f"[OK] Scaler saved to {scaler_path}")
+    print(f"[OK] NLP Model saved to {nlp_model_path}")
+    print(f"[OK] TF-IDF saved to {tfidf_path}")
 
     if accuracy >= 0.97:
         print(f"\n>>> Target accuracy of >97% ACHIEVED ({accuracy * 100:.2f}%)")

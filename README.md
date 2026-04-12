@@ -3,14 +3,16 @@
 A high-performance forensic email analysis platform combining a supervised machine learning backend with a cinematic dark-themed React frontend.
 
 ## Features
-- **Machine Learning**: RandomForestClassifier trained on 100K+ emails leveraging SPF, DKIM, DMARC scores, link counts, and domain heuristics. Attains a >97% target accuracy rate.
-- **Forensic API**: Python FastAPI backend supporting asynchronous batch processing of bulk `.csv` uploads, and raw header extraction of `.eml` files.
+- **Dual-Model ML Architecture**: Employs a dynamic routing engine.
+  - **Tabular Metadata Model**: A highly-accurate RandomForestClassifier leveraging SPF, DKIM, DMARC scores, link counts, and domain heuristics. Attains a >99% accuracy rate on fully-structured datasets.
+  - **NLP Fallback Model**: Uses a TF-IDF vectorizer and secondary Random Forest to natively analyze language patterns in raw text (`body_plain` + `subject`). Activates automatically on unstructured datasets (e.g., Enron or SpamAssassin) to provide robust domain generalization.
+- **Forensic API**: Python FastAPI backend supporting asynchronous batch processing of bulk `.csv` uploads, and raw header extraction of `.eml` files. Fully prevents hard-crashes via intelligent domain-shift handling.
 - **Cinematic UI**: Next.js 14 App Router integration using Tailwind CSS, Framer Motion, and Aceternity UI to provide seamless drag-and-drop animations and risk dashboards.
 
 ## Structure
-- `/backend`: FastAPI Python server, and Random Forest ML pipeline for extracting authentication and behavioral features.
+- `/backend`: FastAPI Python server, housing the Dual-Model ML pipeline (Tabular feature extracting + Text TF-IDF vectorization).
 - `/frontend`: Next.js frontend with drag-and-drop analytics dashboard.
-- `/data`: Contains the `email_dataset_100k.csv` dataset originally used for training.
+- `/data`: Contains various email test sets including `email_dataset_100k.csv` (used for training), and evaluation generalization sets like `Enron.csv` and `SpamAssasin.csv`.
 
 ## Getting Started
 
