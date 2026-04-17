@@ -30,6 +30,9 @@ from backend.preprocessor import (
     FEATURE_COLUMNS,
 )
 
+from backend.evaluate_router import router as evaluate_router
+
+
 # ── App Setup ─────────────────────────────────────────────────
 app = FastAPI(
     title="PhishDetect API",
@@ -44,6 +47,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(evaluate_router)
 
 # ── Load Model ────────────────────────────────────────────────
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")

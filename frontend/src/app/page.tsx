@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { BackgroundBeams } from "@/components/ui/background-beams";
 import { FileUpload } from "@/components/ui/file-upload";
@@ -10,6 +10,7 @@ import { AuthBadge } from "@/components/ui/auth-badge";
 import { RouteMap } from "@/components/ui/route-map";
 import { ResultsTable } from "@/components/ui/results-table";
 import { useAnalysis, type AnalysisResult } from "@/hooks/useAnalysis";
+
 
 // ─── Stagger animation container ─────────────────────────────
 const staggerContainer = {
@@ -36,9 +37,15 @@ export default function Home() {
     null
   );
 
+  const [evalResult, setEvalResult] = useState<any>(null);
+  const [evalLoading, setEvalLoading] = useState(false);
+  const [evalError, setEvalError] = useState<string>("");
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  
   const handleFileChange = useCallback(
     (files: File[]) => {
       if (files.length > 0) {
+        setUploadedFile(files[0]); // ← add this line
         analysis.uploadFile(files[0]);
       }
     },
@@ -75,6 +82,32 @@ export default function Home() {
     link.click();
     document.body.removeChild(link);
   }, [analysis]);
+
+  const handleEvaluate = useCallback(async () => {
+    if (!uploadedFile) return;
+    setEvalLoading(true);
+    setEvalResult(null);
+    setEvalError("");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadedFile);
+      const res = await fetch("http://localhost:8000/evaluate", {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Evaluation failed");
+      }
+      const data = await res.json();
+      setEvalResult(data);
+    } catch (e: any) {
+      setEvalError(e.message);
+    } finally {
+      setEvalLoading(false);
+    }
+  }, [uploadedFile]);
 
   // Pick the first result or selected for detail view
   const detailResult =
@@ -317,7 +350,12 @@ export default function Home() {
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={analysis.reset}
+                  onClick={() => {
+                    analysis.reset();
+                    setEvalResult(null);
+                    setEvalError("");
+                    setUploadedFile(null);
+                  }}
                   className="px-5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white/60 text-sm font-medium hover:bg-white/10 hover:text-white transition-all"
                 >
                   New Analysis
@@ -540,6 +578,112 @@ export default function Home() {
                 />
               </motion.div>
             )}
+
+            {/* ─── Evaluation Section ─────────────────────── */}
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 1.0, duration: 0.6 }}
+              className="max-w-7xl mx-auto mt-8 mb-8"
+            >
+              {/* Header + trigger button */}
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-white/60 text-xs font-mono uppercase tracking-widest">
+                    Model Accuracy Evaluation
+                  </h2>
+                   <p className="text-white/20 text-xs mt-1">
+                    Automatically evaluated from your uploaded dataset
+                  </p>
+                </div>
+                <button
+                  onClick={handleEvaluate}
+                  disabled={evalLoading}
+                  className="px-5 py-2 rounded-xl border border-cyan-500/20 bg-cyan-500/[0.05] text-cyan-300 text-xs font-mono hover:bg-cyan-500/10 transition-all disabled:opacity-40"
+                >
+                  {evalLoading ? "Evaluating..." : "→ Evaluate Labeled Dataset"}
+                </button>
+              </div>
+
+              {/* Error */}
+              {evalError && (
+                <div className="px-5 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-sm mb-4">
+                  {evalError}
+                </div>
+              )}
+
+              {/* Results */}
+              {evalResult && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-6"
+                >
+                  {/* File info */}
+                  <div className="flex items-center gap-4 mb-6 pb-4 border-b border-white/[0.06]">
+                    <div>
+                      <p className="text-white font-medium">{evalResult.file_name}</p>
+                      <p className="text-white/30 text-xs font-mono mt-0.5">
+                        {evalResult.total_rows.toLocaleString()} rows ·{" "}
+                        <span className="text-cyan-400">{evalResult.pipeline}</span>
+                      </p>
+                    </div>
+                    <div className="ml-auto flex gap-3">
+                      <div className="px-3 py-1.5 rounded-lg bg-emerald-500/[0.05] border border-emerald-500/20 text-emerald-400 text-xs font-mono">
+                        {evalResult.label_distribution.legit.toLocaleString()} Legit
+                      </div>
+                      <div className="px-3 py-1.5 rounded-lg bg-red-500/[0.05] border border-red-500/20 text-red-400 text-xs font-mono">
+                        {evalResult.label_distribution.phishing.toLocaleString()} Phishing
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Metrics row */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                    {[
+                      { label: "Accuracy", value: `${evalResult.metrics.accuracy}%`, color: "text-white" },
+                      { label: "Precision", value: evalResult.metrics.precision.toFixed(4), color: "text-cyan-400" },
+                      { label: "Recall", value: evalResult.metrics.recall.toFixed(4), color: "text-blue-400" },
+                      { label: "F1 Score", value: evalResult.metrics.f1_score.toFixed(4), color: "text-violet-400" },
+                    ].map((m) => (
+                      <div
+                        key={m.label}
+                        className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 text-center"
+                      >
+                        <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-2">
+                          {m.label}
+                        </p>
+                        <p className={`text-2xl font-bold font-mono ${m.color}`}>
+                          {m.value}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Confusion matrix */}
+                  <div>
+                    <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">
+                      Confusion Matrix
+                    </p>
+                    <div className="grid grid-cols-2 gap-3 max-w-xs">
+                      {[
+                        { label: "True Negative", value: evalResult.confusion_matrix.tn, color: "text-emerald-400", bg: "bg-emerald-500/[0.05] border-emerald-500/20" },
+                        { label: "False Positive", value: evalResult.confusion_matrix.fp, color: "text-red-400",     bg: "bg-red-500/[0.05] border-red-500/20" },
+                        { label: "False Negative", value: evalResult.confusion_matrix.fn, color: "text-orange-400", bg: "bg-orange-500/[0.05] border-orange-500/20" },
+                        { label: "True Positive",  value: evalResult.confusion_matrix.tp, color: "text-emerald-400", bg: "bg-emerald-500/[0.05] border-emerald-500/20" },
+                      ].map((c) => (
+                        <div key={c.label} className={`rounded-xl border p-4 ${c.bg}`}>
+                          <p className="text-white/30 text-xs font-mono mb-1">{c.label}</p>
+                          <p className={`text-2xl font-bold font-mono ${c.color}`}>
+                            {c.value.toLocaleString()}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
