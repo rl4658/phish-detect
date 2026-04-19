@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { BackgroundBeams } from "@/components/ui/background-beams";
 import { FileUpload } from "@/components/ui/file-upload";
@@ -10,6 +10,7 @@ import { AuthBadge } from "@/components/ui/auth-badge";
 import { RouteMap } from "@/components/ui/route-map";
 import { ResultsTable } from "@/components/ui/results-table";
 import { useAnalysis, type AnalysisResult } from "@/hooks/useAnalysis";
+
 
 // ─── Stagger animation container ─────────────────────────────
 const staggerContainer = {
@@ -36,9 +37,15 @@ export default function Home() {
     null
   );
 
+  const [evalResult, setEvalResult] = useState<any>(null);
+  const [evalLoading, setEvalLoading] = useState(false);
+  const [evalError, setEvalError] = useState<string>("");
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  
   const handleFileChange = useCallback(
     (files: File[]) => {
       if (files.length > 0) {
+        setUploadedFile(files[0]); // ← add this line
         analysis.uploadFile(files[0]);
       }
     },
@@ -75,6 +82,32 @@ export default function Home() {
     link.click();
     document.body.removeChild(link);
   }, [analysis]);
+
+  const handleEvaluate = useCallback(async () => {
+    if (!uploadedFile) return;
+    setEvalLoading(true);
+    setEvalResult(null);
+    setEvalError("");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadedFile);
+      const res = await fetch("http://localhost:8000/evaluate", {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Evaluation failed");
+      }
+      const data = await res.json();
+      setEvalResult(data);
+    } catch (e: any) {
+      setEvalError(e.message);
+    } finally {
+      setEvalLoading(false);
+    }
+  }, [uploadedFile]);
 
   // Pick the first result or selected for detail view
   const detailResult =
@@ -317,7 +350,12 @@ export default function Home() {
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={analysis.reset}
+                  onClick={() => {
+                    analysis.reset();
+                    setEvalResult(null);
+                    setEvalError("");
+                    setUploadedFile(null);
+                  }}
                   className="px-5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white/60 text-sm font-medium hover:bg-white/10 hover:text-white transition-all"
                 >
                   New Analysis
@@ -540,6 +578,130 @@ export default function Home() {
                 />
               </motion.div>
             )}
+
+            {/* ─── Evaluation Section ─────────────────────── */}
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 1.0, duration: 0.6 }}
+              className="max-w-7xl mx-auto mt-8 mb-8"
+            >
+              {/* Header + trigger button */}
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-white/60 text-xs font-mono uppercase tracking-widest">
+                    Model Accuracy Evaluation
+                  </h2>
+                   <p className="text-white/20 text-xs mt-1">
+                    Automatically evaluated from your uploaded dataset
+                  </p>
+                </div>
+                <button
+                  onClick={handleEvaluate}
+                  disabled={evalLoading}
+                  className="px-5 py-2 rounded-xl border border-cyan-500/20 bg-cyan-500/[0.05] text-cyan-300 text-xs font-mono hover:bg-cyan-500/10 transition-all disabled:opacity-40"
+                >
+                  {evalLoading ? "Evaluating..." : "→ Evaluate Labeled Dataset"}
+                </button>
+              </div>
+
+              {/* Error */}
+              {evalError && (
+                <div className="px-5 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-sm mb-4">
+                  {evalError}
+                </div>
+              )}
+
+              {/* Results */}
+              {evalResult && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                  className="rounded-2xl border border-white/[0.08] bg-white/[0.02] overflow-hidden">
+                  
+                  {/* Top bar */}
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06] flex-wrap gap-3">
+                    <div>
+                      <p className="text-white font-medium text-sm">{evalResult.file_name}</p>
+                      <p className="text-white/30 text-xs font-mono mt-0.5">
+                        {evalResult.total_rows.toLocaleString()} rows · <span className="text-cyan-400">{evalResult.pipeline}</span> · label col: {evalResult.label_col}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="px-2.5 py-1 rounded-lg bg-emerald-500/[0.05] border border-emerald-500/20 text-emerald-400 text-xs font-mono">{evalResult.label_distribution.legit.toLocaleString()} legit</span>
+                      <span className="px-2.5 py-1 rounded-lg bg-red-500/[0.05] border border-red-500/20 text-red-400 text-xs font-mono">{evalResult.label_distribution.phishing.toLocaleString()} phishing</span>
+                    </div>
+                  </div>
+
+                  <div className="p-5 space-y-4">
+                    {/* Metrics row */}
+                    <div className="grid grid-cols-4 gap-3">
+                      {[
+                        { label: "Accuracy", value: `${evalResult.metrics.accuracy}%`, color: "text-white" },
+                        { label: "Precision", value: evalResult.metrics.precision.toFixed(4), color: "text-cyan-400" },
+                        { label: "Recall", value: evalResult.metrics.recall.toFixed(4), color: "text-white" },
+                        { label: "F1 Score", value: evalResult.metrics.f1_score.toFixed(4), color: "text-emerald-400" },
+                      ].map((m) => (
+                        <div key={m.label} className="bg-white/[0.03] rounded-xl p-3 text-center">
+                          <p className="text-white/30 text-[10px] font-mono uppercase tracking-widest mb-1.5">{m.label}</p>
+                          <p className={`text-xl font-bold font-mono ${m.color}`}>{m.value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Bottom row: confusion matrix + distribution */}
+                    <div className="grid grid-cols-2 gap-3">
+                      {/* Confusion matrix 2x2 */}
+                      <div className="bg-white/[0.03] rounded-xl p-4">
+                        <p className="text-white/30 text-[10px] font-mono uppercase tracking-widest mb-3">Confusion matrix</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            { label: "True negative", value: evalResult.confusion_matrix.tn, color: "text-emerald-400" },
+                            { label: "False positive", value: evalResult.confusion_matrix.fp, color: "text-red-400" },
+                            { label: "False negative", value: evalResult.confusion_matrix.fn, color: "text-orange-400" },
+                            { label: "True positive", value: evalResult.confusion_matrix.tp, color: "text-emerald-400" },
+                          ].map((c) => (
+                            <div key={c.label} className="rounded-lg border border-white/[0.06] p-3">
+                              <p className="text-white/30 text-[10px] font-mono mb-1">{c.label}</p>
+                              <p className={`text-lg font-bold font-mono ${c.color}`}>{c.value.toLocaleString()}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Distribution */}
+                      <div className="bg-white/[0.03] rounded-xl p-4">
+                        <p className="text-white/30 text-[10px] font-mono uppercase tracking-widest mb-3">Label distribution</p>
+                        {[
+                          { label: "Legitimate", count: evalResult.label_distribution.legit, total: evalResult.total_rows, color: "bg-emerald-500" },
+                          { label: "Phishing", count: evalResult.label_distribution.phishing, total: evalResult.total_rows, color: "bg-red-500" },
+                        ].map((b) => (
+                          <div key={b.label} className="mb-3">
+                            <div className="flex justify-between mb-1">
+                              <span className="text-white/50 text-xs">{b.label}</span>
+                              <span className="text-white text-xs font-mono font-medium">{b.count.toLocaleString()}</span>
+                            </div>
+                            <div className="h-1.5 bg-white/[0.05] rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${b.color}/60`} style={{ width: `${(b.count / b.total) * 100}%` }} />
+                            </div>
+                          </div>
+                        ))}
+                        <div className="mt-4 pt-3 border-t border-white/[0.06] space-y-1">
+                          <div className="flex justify-between">
+                            <span className="text-white/30 text-xs">Error rate</span>
+                            <span className="text-orange-400 text-xs font-mono font-medium">
+                              {(((evalResult.confusion_matrix.fp + evalResult.confusion_matrix.fn) / evalResult.total_rows) * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-white/30 text-xs">Total samples</span>
+                            <span className="text-white/60 text-xs font-mono">{evalResult.total_rows.toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
